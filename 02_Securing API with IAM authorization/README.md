@@ -44,7 +44,7 @@ Once again, we're using the `!Sub` function here. The resource ARN points to the
 ```yml
 provider:
   name: aws
-  runtime: nodejs16.x
+  runtime: nodejs18.x
   iam:
     role:
       statements:

@@ -242,7 +242,7 @@ CognitoUserPoolServerClientId:
   Value: !Ref ServerCognitoUserPoolClient
 ```
 
-Afterwards, your `Outputs` section should look this like:
+Afterwards, your `Outputs` section should look like this:
 
 ```yml
 Outputs:

@@ -444,9 +444,11 @@ Add `.env` to your `.gitignore` file
 8. Modify `seed-restaurants.js` to the following.
 
 ```javascript
-const AWS = require('aws-sdk')
-AWS.config.region = 'us-east-1'
-const dynamodb = new AWS.DynamoDB.DocumentClient()
+const { DynamoDB } = require("@aws-sdk/client-dynamodb")
+const { marshall } = require("@aws-sdk/util-dynamodb")
+const dynamodb = new DynamoDB({
+  region: 'us-east-1'
+})
 require('dotenv').config()
 
 const restaurants = [
@@ -494,7 +496,7 @@ const restaurants = [
 
 const putReqs = restaurants.map(x => ({
   PutRequest: {
-    Item: x
+    Item: marshall(x)
   }
 }))
 
@@ -503,7 +505,7 @@ const req = {
     [process.env.restaurants_table]: putReqs
   }
 }
-dynamodb.batchWrite(req).promise()
+dynamodb.batchWriteItem(req)
   .then(() => console.log("all done"))
   .catch(err => console.error(err))
 ```

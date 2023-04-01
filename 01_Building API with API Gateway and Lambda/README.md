@@ -692,18 +692,11 @@ This adds the `dynamodb:scan` permission to the Lambda execution role.
 
 `mustache` is a templating library for javascript, which we'll use to "render" our HTML page.
 
-2. Install `axios` as dependency
-
-`npm install --save axios`
-
-`axios` is a HTTP client library, we will use it to make a HTTP from the `get-index` function to the new `/restaurants` endpoint to fetch a list of restaurants to render.
-
-3. Modify `get-index.js` to the following:
+2. Modify `get-index.js` to the following:
 
 ```javascript
 const fs = require("fs")
 const Mustache = require('mustache')
-const http = require('axios')
 
 const restaurantsApiRoot = process.env.restaurants_api
 const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
@@ -721,8 +714,9 @@ function loadHtml () {
 }
 
 const getRestaurants = async () => {
-  const httpReq = http.get(restaurantsApiRoot)
-  return (await httpReq).data
+  const res = await fetch(restaurantsApiRoot)
+  const data = await res.json()
+  return data
 }
 
 module.exports.handler = async (event, context) => {

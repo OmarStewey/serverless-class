@@ -27,8 +27,9 @@ search-restaurants:
 3. Modify `search-restaurants.js` to the following:
 
 ```javascript
-const DocumentClient = require('aws-sdk/clients/dynamodb').DocumentClient
-const dynamodb = new DocumentClient()
+const { DynamoDB } = require("@aws-sdk/client-dynamodb")
+const { marshall, unmarshall } = require("@aws-sdk/util-dynamodb")
+const dynamodb = new DynamoDB()
 
 const defaultResults = process.env.defaultResults || 8
 const tableName = process.env.restaurants_table
@@ -39,12 +40,12 @@ const findRestaurantsByTheme = async (theme, count) => {
     TableName: tableName,
     Limit: count,
     FilterExpression: "contains(themes, :theme)",
-    ExpressionAttributeValues: { ":theme": theme }
+    ExpressionAttributeValues: marshall({ ":theme": theme })
   }
 
-  const resp = await dynamodb.scan(req).promise()
+  const resp = await dynamodb.scan(req)
   console.log(`found ${resp.Items.length} restaurants`)
-  return resp.Items
+  return resp.Items.map(x => unmarshall(x))
 }
 
 module.exports.handler = async (event, context) => {

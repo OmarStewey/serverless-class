@@ -45,13 +45,13 @@ But we need to make sure when we distribute the secret to our application, we do
 2. At the very end of the file, replace the `.use(...)` block with the following:
 
 ```javascript
-.use(ssm({
-  cache: true,
-  cacheExpiry: 1 * 60 * 1000, // 1 mins
+}).use(ssm({
+  cache: middyCacheEnabled,
+  cacheExpiry: middyCacheExpiry,
   setToContext: true,
   fetchData: {
-    config: `/${serviceName}/${stage}/search-restaurants/config`,
-    secretString: `/${serviceName}/${stage}/search-restaurants/secretString`
+    config: `/${serviceName}/${ssmStage}/search-restaurants/config`,
+    secretString: `/${serviceName}/${ssmStage}/search-restaurants/secretString`
   }
 }))
 ```
@@ -70,12 +70,12 @@ module.exports.handler = middy(async (event, context) => {
 
   return response
 }).use(ssm({
-  cache: true,
-  cacheExpiry: 1 * 60 * 1000, // 1 mins
+  cache: middyCacheEnabled,
+  cacheExpiry: middyCacheExpiry,
   setToContext: true,
   fetchData: {
-    config: `/${serviceName}/${stage}/search-restaurants/config`,
-    secretString: `/${serviceName}/${stage}/search-restaurants/secretString`
+    config: `/${serviceName}/${ssmStage}/search-restaurants/config`,
+    secretString: `/${serviceName}/${ssmStage}/search-restaurants/secretString`
   }
 }))
 ```
@@ -103,15 +103,15 @@ somewhere in the handler function, and run the integration test to see that it's
 
 There's one last thing we need to do for this to work once we deploy the app - IAM permissions.
 
-1. Open `serverless.yml`, and find the `iam.role.statements` block under `provider`, add the following permission statement.
+1. Open `serverless.yml`, and find the `iam.role.statements` block under `provider`, add the new SSM parameter to the relevant permission statement, ie.
 
 ```yml
 - Effect: Allow
   Action: ssm:GetParameters*
   Resource:
-    - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${self:service}/${sls:stage}/get-restaurants/config
-    - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${self:service}/${sls:stage}/search-restaurants/config
-    - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${self:service}/${sls:stage}/search-restaurants/secretString
+    - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${self:service}/${param:ssmStage, sls:stage}/get-restaurants/config
+    - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${self:service}/${param:ssmStage, sls:stage}/search-restaurants/config
+    - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${self:service}/${param:ssmStage, sls:stage}/search-restaurants/secretString
 ```
 
 After the change, the `iam` block should look like this.
@@ -129,9 +129,9 @@ iam:
       - Effect: Allow
         Action: ssm:GetParameters*
         Resource:
-          - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${self:service}/${sls:stage}/get-restaurants/config
-          - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${self:service}/${sls:stage}/search-restaurants/config
-          - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${self:service}/${sls:stage}/search-restaurants/secretString
+          - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${self:service}/${param:ssmStage, sls:stage}/get-restaurants/config
+          - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${self:service}/${param:ssmStage, sls:stage}/search-restaurants/config
+          - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${self:service}/${param:ssmStage, sls:stage}/search-restaurants/secretString
 ```
 
 2. Deploy the project

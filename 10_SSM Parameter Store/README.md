@@ -539,9 +539,9 @@ However, some nuances are required when you mix **serverful** resources with ser
 
 I discussed these nuances in a recent [blog post](https://theburningmonk.com/2023/02/how-to-handle-serverful-resources-when-using-ephemeral-environments/), please have a read when you have time.
 
-But there's another important nuance to consider with regards to using temporary environments with SSM parameters.
+But there's another important nuance to consider concerning using temporary environments with SSM parameters.
 
-Namely, **how can you share SSM parameters across these temporary environment**?
+Namely, **how can you share SSM parameters across these temporary environments**?
 
 Let me show you an easy way, by introducing a layer of indirection.
 
@@ -549,7 +549,7 @@ We will introduce a new `ssmStage` parameter to tell our functions which environ
 
 That way, when we create a new `dev-yan` stage, we can still use the same SSM parameters from the `dev` stage (assuming that's the one we want to use).
 
-Luckily for us, the Serverless framework supports custom parameters, see official documentation [here](https://www.serverless.com/framework/docs/guides/parameters) for more details.
+Luckily for us, the Serverless framework supports custom parameters, see the official documentation [here](https://www.serverless.com/framework/docs/guides/parameters) for more details.
 
 1. Open `serverless.yml` and add the following to `provider.environment`:
 
@@ -638,7 +638,7 @@ and make sure the tests are still passing.
 
 (replace `[YOUR NAME]` with your name, no spaces)
 
-This would create a new environment called, for example, `dev-yan`, but have it use the SSM parameters from the main `dev` environment that we had configured by hand earlier.
+This creates a new environment called, for example, `dev-yan`, but it would use the SSM parameters from the main `dev` environment that we had configured by hand earlier.
 
 To generate a new `.env` file for this environment, we can run
 
@@ -656,7 +656,7 @@ To run the integration tests using the newly generated `.env` file, run:
 
 And the tests should pass.
 
-Then run the e2e tests without regeneating the `.env` file:
+Then run the e2e tests without regenerating the `.env` file:
 
 `npx cross-env TEST_MODE=http jest`
 

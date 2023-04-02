@@ -415,7 +415,7 @@ After this round of changes, you might have noticed that the integration tests n
 
 ![](/images/mod12-013.png)
 
-This is caused by a known issue with Middy 4.x when you use the cache expiry feature. See the GitHub issue here. This issue can block CI runners from finishing your tests, so it's important that we address it here.
+This is caused by a known issue with Middy 4.x when you use the cache expiry feature. See the GitHub issue here. This issue can block CI runners from finishing your tests, so we must address it here.
 
 What we can do is to disable the caching behaviour in our tests, but leave them on in the real thing.
 
@@ -505,17 +505,172 @@ replace this block with the following:
 }))
 ```
 
-so the `cache` and `cacheExpiry` configurations are now control by our new environment variables.
+so the `cache` and `cacheExpiry` configurations are now controlled by our new environment variables.
 
 5. Repeat step 4 for the `search-restaurants.js` module.
 
 6. Rerun the integration tests
 
-```
-npm run test
-```
+`npm run test`
 
 and the warning message should be gone.
+
+</p></details>
+
+<details>
+<summary><b>Sharing SSM parameters across temporary environments</b></summary><p>
+
+When using serverless technologies, you should use [temporary environments](https://theburningmonk.com/2019/09/why-you-should-use-temporary-stacks-when-you-do-serverless/) and take advantage of the pay-per-use nature of the services you tend to use.
+
+This includes:
+
+* Create a new environment for feature work.
+* Create a new environment for every developer.
+* Create a new environment for every CI run, so you don't have to worry about accumulating test data in your shared environments like dev, test and staging.
+
+These temporary environments are short-lived and can be easily torn down when you don't need them anymore. And they can all live in the same AWS account. If you follow the practices we have demonstrated in this workshop and either:
+
+* Let CloudFormation name your resources
+* Ensure resource names include the `stage` name
+
+then you wouldn't run into problems with clashing names for Lambda functions, CloudWatch log groups, etc. etc. To create a new environment, simply run `npx sls deploy --stage feature-name` to create a new environment for a new feature. And when you're done, run `npx sls remove --stage feature-name` to dismantle the environment.
+
+However, some nuances are required when you mix **serverful** resources with serverless resources. Because you will pay for uptime for those serverful resources (you know, ones where you have to provision a cluster of nodes and pay by the hour).
+
+I discussed these nuances in a recent [blog post](https://theburningmonk.com/2023/02/how-to-handle-serverful-resources-when-using-ephemeral-environments/), please have a read when you have time.
+
+But there's another important nuance to consider with regards to using temporary environments with SSM parameters.
+
+Namely, **how can you share SSM parameters across these temporary environment**?
+
+Let me show you an easy way, by introducing a layer of indirection.
+
+We will introduce a new `ssmStage` parameter to tell our functions which environment's SSM parameters we should use.
+
+That way, when we create a new `dev-yan` stage, we can still use the same SSM parameters from the `dev` stage (assuming that's the one we want to use).
+
+Luckily for us, the Serverless framework supports custom parameters, see official documentation [here](https://www.serverless.com/framework/docs/guides/parameters) for more details.
+
+1. Open `serverless.yml` and add the following to `provider.environment`:
+
+```yml
+ssmStage: ${param:ssmStage, sls:stage}
+```
+
+This adds a new `ssmStage` environment variable for all of our functions in this project. And it'll look for a `ssmStage` parameter from the CLI, and if not found, it'll fallback to the built-in `sls:stage` variable and use the stage name instead.
+
+Again, check your indentations ;-)
+
+2. Under `provider.iam.role.statement`, we also need to change the ARNs for the SSM parameters to use this new parameter.
+
+Change this IAM statement:
+
+```yml
+- Effect: Allow
+  Action: ssm:GetParameters*
+  Resource:
+    - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${self:service}/${sls:stage}/get-restaurants/config
+    - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${self:service}/${sls:stage}/search-restaurants/config
+```
+
+to the following:
+
+```yml
+- Effect: Allow
+  Action: ssm:GetParameters*
+  Resource:
+    - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${self:service}/${param:ssmStage, sls:stage}/get-restaurants/config
+    - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${self:service}/${param:ssmStage, sls:stage}/search-restaurants/config
+```
+
+3. Open the `get-restaurants.js` module.
+
+Replace this line:
+
+```js
+const { serviceName, stage } = process.env
+```
+
+with
+
+```js
+const { serviceName, ssmStage } = process.env
+```
+
+And replace the path of the SSM parameter in this block
+
+```js
+}).use(ssm({
+  cache: middyCacheEnabled,
+  cacheExpiry: middyCacheExpiry,
+  setToContext: true,
+  fetchData: {
+    config: `/${serviceName}/${stage}/get-restaurants/config`
+  }
+}))
+```
+
+to use the new `ssmStage` environment variable instead, ie.
+
+```js
+}).use(ssm({
+  cache: middyCacheEnabled,
+  cacheExpiry: middyCacheExpiry,
+  setToContext: true,
+  fetchData: {
+    config: `/${serviceName}/${ssmStage}/get-restaurants/config`
+  }
+}))
+```
+
+
+4. Repeat step 3 for `search-restaurants.js` module.
+
+5. Rerun the integration tests
+
+`npm run test`
+
+and make sure the tests are still passing.
+
+6. [Optional] To test this out with a temporary environment, run
+
+`npx sls deploy --stage dev-[YOUR NAME] --param="ssmStage=dev"`
+
+(replace `[YOUR NAME]` with your name, no spaces)
+
+This would create a new environment called, for example, `dev-yan`, but have it use the SSM parameters from the main `dev` environment that we had configured by hand earlier.
+
+To generate a new `.env` file for this environment, we can run
+
+`npx sls export-env --all --stage dev-[YOUR NAME] --param="ssmStage=dev"`
+
+(again, replace `[YOUR NAME]`)
+
+Inspect the new `.env` file, and you should see the stage name in the URL paths as well as the DynamoDB table name.
+
+**Unfortunately**, our package.json scripts are not set up to accept this new parameter at the moment. So to keep this step brief, let's run the tests using jest directly.
+
+To run the integration tests using the newly generated `.env` file, run:
+
+`npx cross-env TEST_MODE=handler jest`
+
+And the tests should pass.
+
+Then run the e2e tests without regeneating the `.env` file:
+
+`npx cross-env TEST_MODE=http jest`
+
+And the tests should also pass.
+
+Now that we're done, let's delete this temporary environment by running
+
+`npx sls remove --stage dev-[YOUR NAME] --param="ssmStage=dev"`
+
+(again, replace `[YOUR NAME]`)
+
+Finally, it's worth noting that this `--param="ssmStage=dev"` flag is only needed when you work on the temporary environment.
+
+Because of the fallback we used when referencing this parameter in the `serverless.yml` (i.e. `${param:ssmStage, sls:stage}`), you don't need to set this parameter when working with the main stages such as dev, test and staging.
 
 </p></details>
 

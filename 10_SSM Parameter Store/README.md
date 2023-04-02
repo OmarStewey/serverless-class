@@ -134,7 +134,7 @@ After this change, your `provider` section should look like this:
 ```yml
 provider:
   name: aws
-  runtime: nodejs16.x
+  runtime: nodejs18.x
   iam:
     role:
       statements:
@@ -157,7 +157,7 @@ const middy = require('@middy/core')
 const ssm = require('@middy/ssm')
 ```
 
-4. On ln6
+4. On line 7
 
 ```javascript
 const defaultResults = process.env.defaultResults || 8
@@ -251,7 +251,7 @@ const middy = require('@middy/core')
 const ssm = require('@middy/ssm')
 ```
 
-8. Replace ln6
+8. Replace line 7
 
 ```javascript
 const defaultResults = process.env.defaultResults || 8

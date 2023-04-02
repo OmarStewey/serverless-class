@@ -69,11 +69,17 @@ This function also uses the same Cognito User Tool for authorization, as it'll b
 
 3. Add a file `place-order.js` to the `functions` folder
 
-4. Modify `place-order.js` to the following
+4. We will need to talk to EventBridge in this new module, so let's install the AWS SDK EventBridge client as a **dev dependency**
+
+```
+npm i --save-dev @aws-sdk/client-eventbridge
+```
+
+5. Modify `place-order.js` to the following
 
 ```javascript
-const EventBridge = require('aws-sdk/clients/eventbridge')
-const eventBridge = new EventBridge()
+const { EventBridgeClient, PutEventsCommand } = require('@aws-sdk/client-eventbridge')
+const eventBridge = new EventBridgeClient()
 const chance = require('chance').Chance()
 
 const busName = process.env.bus_name
@@ -84,7 +90,7 @@ module.exports.handler = async (event) => {
   const orderId = chance.guid()
   console.log(`placing order ID [${orderId}] to [${restaurantName}]`)
 
-  await eventBridge.putEvents({
+  const putEvent = new PutEventsCommand({
     Entries: [{
       Source: 'big-mouth',
       DetailType: 'order_placed',
@@ -94,7 +100,8 @@ module.exports.handler = async (event) => {
       }),
       EventBusName: busName
     }]
-  }).promise()
+  })
+  await eventBridge.send(putEvent)
 
   console.log(`published 'order_placed' event into EventBridge`)
 
@@ -125,10 +132,10 @@ const when = require('../steps/when')
 const given = require('../steps/given')
 const teardown = require('../steps/teardown')
 const { init } = require('../steps/init')
-const AWS = require('aws-sdk')
+const { EventBridgeClient } = require('@aws-sdk/client-eventbridge')
 
-const mockPutEvents = jest.fn()
-AWS.EventBridge.prototype.putEvents = mockPutEvents
+const mockSend = jest.fn()
+EventBridgeClient.prototype.send = mockSend
 
 describe('Given an authenticated user', () => {
   let user
@@ -146,10 +153,8 @@ describe('Given an authenticated user', () => {
     let resp
 
     beforeAll(async () => {
-      mockPutEvents.mockClear()
-      mockPutEvents.mockReturnValue({
-        promise: async () => {}
-      })
+      mockSend.mockClear()
+      mockSend.mockReturnValue({})
 
       resp = await when.we_invoke_place_order(user, 'Fangtasia')
     })
@@ -159,13 +164,15 @@ describe('Given an authenticated user', () => {
     })
 
     it(`Should publish a message to EventBridge bus`, async () => {
-      expect(mockPutEvents).toBeCalledWith({
+      expect(mockSend).toHaveBeenCalledTimes(1)
+      const [ putEventsCmd ] = mockSend.mock.calls[0]
+      expect(putEventsCmd.input).toEqual({
         Entries: [
           expect.objectContaining({
             Source: 'big-mouth',
             DetailType: 'order_placed',
             Detail: expect.stringContaining(`"restaurantName":"Fangtasia"`),
-            EventBusName: expect.stringMatching(process.env.bus_name)
+            EventBusName: process.env.bus_name
           })
         ]
       })
@@ -253,13 +260,15 @@ Wrap the test case
 
 ```javascript
 it(`Should publish a message to EventBridge bus`, async () => {
-  expect(mockPutEvents).toBeCalledWith({
+  expect(mockSend).toHaveBeenCalledTimes(1)
+  const [ putEventsCmd ] = mockSend.mock.calls[0]
+  expect(putEventsCmd.input).toEqual({
     Entries: [
       expect.objectContaining({
         Source: 'big-mouth',
         DetailType: 'order_placed',
         Detail: expect.stringContaining(`"restaurantName":"Fangtasia"`),
-        EventBusName: expect.stringMatching(process.env.bus_name)
+        EventBusName: process.env.bus_name
       })
     ]
   })
@@ -271,13 +280,15 @@ in an `if` block like this
 ```javascript
 if (process.env.TEST_MODE === 'handler') {
   it(`Should publish a message to EventBridge bus`, async () => {
-    expect(mockPutEvents).toBeCalledWith({
+    expect(mockSend).toHaveBeenCalledTimes(1)
+    const [ putEventsCmd ] = mockSend.mock.calls[0]
+    expect(putEventsCmd.input).toEqual({
       Entries: [
         expect.objectContaining({
           Source: 'big-mouth',
           DetailType: 'order_placed',
           Detail: expect.stringContaining(`"restaurantName":"Fangtasia"`),
-          EventBusName: expect.stringMatching(process.env.bus_name)
+          EventBusName: process.env.bus_name
         })
       ]
     })
@@ -898,36 +909,43 @@ RestaurantNotificationTopicArn:
 
 4. Add a file `notify-restaurant.js` in the `functions` folder
 
-5. Modify `functions/notify-restaurant.js` to the following
+5. We will need to install the AWS SDK's SNS client so we can publish notifications to the SNS topic. Again, we're gonna install the client as a **dev dependency**.
+
+```
+npm i --save-dev @aws-sdk/client-sns
+```
+
+6. Modify `functions/notify-restaurant.js` to the following
 
 ```javascript
-const EventBridge = require('aws-sdk/clients/eventbridge')
-const eventBridge = new EventBridge()
-const SNS = require('aws-sdk/clients/sns')
-const sns = new SNS()
+const { EventBridgeClient, PutEventsCommand } = require('@aws-sdk/client-eventbridge')
+const eventBridge = new EventBridgeClient()
+const { SNSClient, PublishCommand } = require('@aws-sdk/client-sns')
+const sns = new SNSClient()
 
 const busName = process.env.bus_name
 const topicArn = process.env.restaurant_notification_topic
 
 module.exports.handler = async (event) => {
   const order = event.detail
-  const snsReq = {
+  const publishCmd = new PublishCommand({
     Message: JSON.stringify(order),
     TopicArn: topicArn
-  };
-  await sns.publish(snsReq).promise()
+  })
+  await sns.send(publishCmd)
 
   const { restaurantName, orderId } = order
   console.log(`notified restaurant [${restaurantName}] of order [${orderId}]`)
 
-  await eventBridge.putEvents({
+  const putEventsCmd = new PutEventsCommand({
     Entries: [{
       Source: 'big-mouth',
       DetailType: 'restaurant_notified',
       Detail: JSON.stringify(order),
       EventBusName: busName
     }]
-  }).promise()
+  })
+  await eventBridge.send(putEventsCmd)
 
   console.log(`published 'restaurant_notified' event to EventBridge`)
 }
@@ -938,7 +956,7 @@ This `notify-restaurant` function would be trigger by `EventBridge`, and by the 
 Remember that in the `place-order` function we published `Detail` as a JSON string:
 
 ```javascript
-await eventBridge.putEvents({
+const putEvent = new PutEventsCommand({
   Entries: [{
     Source: 'big-mouth',
     DetailType: 'order_placed',
@@ -948,7 +966,7 @@ await eventBridge.putEvents({
     }),
     EventBusName: busName
   }]
-}).promise()
+})
 ```
 
 However, when `EventBridge` invokes our function, `event.detail` is going to be an object, and it's called `detail` not `Detail` (one of many inconsistencies that you just have to live with in AWS...)
@@ -975,31 +993,6 @@ notify-restaurant:
     restaurant_notification_topic: !Ref RestaurantNotificationTopic
 ```
 
-7. For legacy reasons, in order to use `!Ref EventBus` to reference the event bus to use with the `notify-restaurants` function, you also have to add the following to the `provider` section of the `serverless.yml`:
-
-```yml
-eventBridge:
-  useCloudFormation: true
-```
-
-This is because, until recently, the Serverless framework would use a CloudFormation custom resource to provision the EventBridge trigger. So, to prevent a breaking change, this was the compromise they came up with.
-
-In any case, after this, your `provider` section should look something like this:
-
-```yml
-provider:
-  name: aws
-  runtime: nodejs16.x
-  eventBridge:
-    useCloudFormation: true
-  iam:
-    ...
-  environment:
-    ...  
-```
-
-Make sure all the indentations are correct!
-
 If you have read the Serverless framework [docs](https://serverless.com/framework/docs/providers/aws/events/event-bridge#using-a-different-event-bus) on EventBridge, then you might also be wondering why I didn't just let the Serverless framework create the bus for us.
 
 That is a very good question!
@@ -1012,7 +1005,7 @@ As for the subscription pattern itself, well, in this case we're listening for o
 
 To learn more about content-based filtering with EventBridge, have a read of [this post](https://www.tbray.org/ongoing/When/201x/2019/12/18/Content-based-filtering) by Tim Bray.
 
-8. Modify `serverless.yml` to add the permission to `sns:Publish` to the SNS topic, under `provider.iam.role.statements`
+7. Modify `serverless.yml` to add the permission to `sns:Publish` to the SNS topic, under `provider.iam.role.statements`
 
 ```yml
 - Effect: Allow
@@ -1049,35 +1042,32 @@ module.exports = {
 }
 ```
 
-3. Add a file `notify-restaurant.tests.js` to the `test_cases` folder
+2. Add a file `notify-restaurant.tests.js` to the `test_cases` folder
 
-4. Modify `test_cases/notify-restaurant.tests.js` to the following
+3. Modify `test_cases/notify-restaurant.tests.js` to the following
 
 ```javascript
 const { init } = require('../steps/init')
 const when = require('../steps/when')
-const AWS = require('aws-sdk')
 const chance = require('chance').Chance()
+const { EventBridgeClient } = require('@aws-sdk/client-eventbridge')
+const { SNSClient } = require('@aws-sdk/client-sns')
 
-const mockPutEvents = jest.fn()
-AWS.EventBridge.prototype.putEvents = mockPutEvents
-const mockPublish = jest.fn()
-AWS.SNS.prototype.publish = mockPublish
+const mockEvbSend = jest.fn()
+EventBridgeClient.prototype.send = mockEvbSend
+const mockSnsSend = jest.fn()
+SNSClient.prototype.send = mockSnsSend
 
 describe(`When we invoke the notify-restaurant function`, () => {
   if (process.env.TEST_MODE === 'handler') {
     beforeAll(async () => {
       await init()
 
-      mockPutEvents.mockClear()
-      mockPublish.mockClear()
+      mockEvbSend.mockClear()
+      mockSnsSend.mockClear()
 
-      mockPutEvents.mockReturnValue({
-        promise: async () => {}
-      })
-      mockPublish.mockReturnValue({
-        promise: async () => {}
-      })
+      mockEvbSend.mockReturnValue({})
+      mockSnsSend.mockReturnValue({})
 
       const event = {
         source: 'big-mouth',
@@ -1092,20 +1082,25 @@ describe(`When we invoke the notify-restaurant function`, () => {
     })
 
     it(`Should publish message to SNS`, async () => {
-      expect(mockPublish).toBeCalledWith({
+      expect(mockSnsSend).toHaveBeenCalledTimes(1)
+      const [ publishCmd ] = mockSnsSend.mock.calls[0]
+
+      expect(publishCmd.input).toEqual({
         Message: expect.stringMatching(`"restaurantName":"Fangtasia"`),
         TopicArn: expect.stringMatching(process.env.restaurant_notification_topic)
       })
     })
 
     it(`Should publish event to EventBridge`, async () => {
-      expect(mockPutEvents).toBeCalledWith({
+      expect(mockEvbSend).toHaveBeenCalledTimes(1)
+      const [ putEventsCmd ] = mockEvbSend.mock.calls[0]
+      expect(putEventsCmd.input).toEqual({
         Entries: [
           expect.objectContaining({
             Source: 'big-mouth',
             DetailType: 'restaurant_notified',
             Detail: expect.stringContaining(`"restaurantName":"Fangtasia"`),
-            EventBusName: expect.stringMatching(process.env.bus_name)
+            EventBusName: process.env.bus_name
           })
         ]
       })
@@ -1118,7 +1113,7 @@ describe(`When we invoke the notify-restaurant function`, () => {
 
 Notice that all the test cases are wrapped inside a big `if` condition. It's weird, I know.. Ignore it for now, we'll talk about it shortly.
 
-5. Run integration tests
+4. Run integration tests
 
 `npm run test`
 
@@ -1168,7 +1163,7 @@ and see that the new test is failing
 
 This is because our `notify-restaurant` function doesn't return any response because it doesn't need to. But the `when.viaHandler` function kinda expects a response object with `body`.
 
-6. Modify `steps/when.js` to update the `viaHandler` function to handle this
+5. Modify `steps/when.js` to update the `viaHandler` function to handle this
 
 ```javascript
 const viaHandler = async (event, functionName) => {
@@ -1184,7 +1179,7 @@ const viaHandler = async (event, functionName) => {
 }
 ```
 
-7. Rerun integration tests
+6. Rerun integration tests
 
 `npm run test`
 
@@ -1207,6 +1202,10 @@ Tests:       7 passed, 7 total
 Snapshots:   0 total
 Time:        6.694s
 ```
+
+7. Now that the integration tests are passing, let's deploy the project.
+
+`npx sls deploy`
 
 </p></details>
 
@@ -1242,11 +1241,17 @@ While working on these changes, we don't have a way to check what our functions 
 
 ![](/images/mod15-003.png)
 
-1. Deploy the project.
+1. Install the `lumigo-cli` as a **dev dependency**.
 
-`npx sls deploy`
+`npm i --save-dev lumigo-cli`
 
-2. Use the `lumigo-cli` to peek at both the SNS topic and the EventBridge bus.
+**Important**: DON'T install this as a prod dependency, otherwise it'll be included as part of the deployment package and you'll exceed the max deployment package size allowed (256MB).
+
+2. Use the `lumigo-cli` to peek at both the SNS topic and the EventBridge bus. For example, by running
+
+`npx lumigo-cli tail-sns -r us-east-1 -n [TOPIC NAME]`
+
+(replace `[TOPIC NAME]` with the name of your SNS topic)
 
 3. Load the index page in the browser and place a few orders. You should see those events show up in the `lumigo-cli` terminals.
 

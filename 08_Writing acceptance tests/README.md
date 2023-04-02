@@ -70,7 +70,7 @@ After this change, the `provider` section of your `serverless.yml` should look l
 ```yml
 provider:
   name: aws
-  runtime: nodejs16.x
+  runtime: nodejs18.x
   iam:
     role:
       statements:
@@ -416,67 +416,78 @@ Notice that I'm installing it as a production dependency, and not a dev dependen
 
 2. Add a file `given.js` to `steps` folder
 
-3. Modify `steps/given.js` to the following
+3. Install the aws-sdk client for Cognito User Pool
+
+`npm install --save-dev @aws-sdk/client-cognito-identity-provider`
+
+We will use it to create users in our Cognito User Pool for the test.
+
+4. Modify `steps/given.js` to the following
 
 ```javascript
-const AWS = require('aws-sdk')
+const { 
+  CognitoIdentityProviderClient,
+  AdminCreateUserCommand,
+  AdminInitiateAuthCommand,
+  AdminRespondToAuthChallengeCommand
+} = require('@aws-sdk/client-cognito-identity-provider')
 const chance  = require('chance').Chance()
 
 // needs number, special char, upper and lower case
 const random_password = () => `${chance.string({ length: 8})}B!gM0uth`
 
 const an_authenticated_user = async () => {
-  const cognito = new AWS.CognitoIdentityServiceProvider()
+  const cognito = new CognitoIdentityProviderClient()
   
   const userpoolId = process.env.cognito_user_pool_id
   const clientId = process.env.cognito_server_client_id
 
   const firstName = chance.first({ nationality: "en" })
-  const lastName  = chance.last({ nationality: "en" })
-  const suffix    = chance.string({length: 8, pool: "abcdefghijklmnopqrstuvwxyz"})
-  const username  = `test-${firstName}-${lastName}-${suffix}`
-  const password  = random_password()
-  const email     = `${firstName}-${lastName}@big-mouth.com`
+  const lastName = chance.last({ nationality: "en" })
+  const suffix = chance.string({length: 8, pool: "abcdefghijklmnopqrstuvwxyz"})
+  const username = `test-${firstName}-${lastName}-${suffix}`
+  const password = random_password()
+  const email = `${firstName}-${lastName}@big-mouth.com`
 
-  const createReq = {
-    UserPoolId        : userpoolId,
-    Username          : username,
-    MessageAction     : 'SUPPRESS',
-    TemporaryPassword : password,
-    UserAttributes    : [
-      { Name: "given_name",  Value: firstName },
+  const createReq = new AdminCreateUserCommand({
+    UserPoolId: userpoolId,
+    Username: username,
+    MessageAction: 'SUPPRESS',
+    TemporaryPassword: password,
+    UserAttributes: [
+      { Name: "given_name", Value: firstName },
       { Name: "family_name", Value: lastName },
-      { Name: "email",       Value: email }
+      { Name: "email", Value: email }
     ]
-  }
-  await cognito.adminCreateUser(createReq).promise()
+  })
+  await cognito.send(createReq)
 
   console.log(`[${username}] - user is created`)
   
-  const req = {
-    AuthFlow        : 'ADMIN_NO_SRP_AUTH',
-    UserPoolId      : userpoolId,
-    ClientId        : clientId,
-    AuthParameters  : {
+  const req = new AdminInitiateAuthCommand({
+    AuthFlow: 'ADMIN_NO_SRP_AUTH',
+    UserPoolId: userpoolId,
+    ClientId: clientId,
+    AuthParameters: {
       USERNAME: username,
       PASSWORD: password
     }
-  }
-  const resp = await cognito.adminInitiateAuth(req).promise()
+  })
+  const resp = await cognito.send(req)
 
   console.log(`[${username}] - initialised auth flow`)
 
-  const challengeReq = {
-    UserPoolId          : userpoolId,
-    ClientId            : clientId,
-    ChallengeName       : resp.ChallengeName,
-    Session             : resp.Session,
-    ChallengeResponses  : {
+  const challengeReq = new AdminRespondToAuthChallengeCommand({
+    UserPoolId: userpoolId,
+    ClientId: clientId,
+    ChallengeName: resp.ChallengeName,
+    Session: resp.Session,
+    ChallengeResponses: {
       USERNAME: username,
       NEW_PASSWORD: random_password()
     }
-  }
-  const challengeResp = await cognito.adminRespondToAuthChallenge(challengeReq).promise()
+  })
+  const challengeResp = await cognito.send(challengeReq)
   
   console.log(`[${username}] - responded to auth challenge`)
 
@@ -497,7 +508,7 @@ This requires the env vars `cognito_user_pool_id` and `cognito_server_client_id`
 
 While the `cognito_user_pool_id` is already captured as an environment variable for the `get-index` function, we need to add the `cognito_server_client_id` environment variable.
 
-4. None of our functions need the Cognito server client id, but for the purpose of our tests, we need to capture it somehow. The closest function I can think of is the `get-index` function, so let's put it there.
+5. None of our functions need the Cognito server client id, but for the purpose of our tests, we need to capture it somehow. The closest function I can think of is the `get-index` function, so let's put it there.
 
 Open the `serverless.yml` and update the `get-index` function's definition to add a `cognito_server_client_id` environment variable like this:
 
@@ -519,21 +530,24 @@ get-index:
     cognito_server_client_id: !Ref ServerCognitoUserPoolClient
 ```
 
-5. After each test, we also want to delete the test user so test data doesn't just accumulate in our environment.
+6. After each test, we also want to delete the test user so test data doesn't just accumulate in our environment.
 
 Add a file `teardown.js` to the `steps` folder and paste the following in
 
 ```javascript
-const AWS = require('aws-sdk')
+const { 
+  CognitoIdentityProviderClient,
+  AdminDeleteUserCommand
+} = require('@aws-sdk/client-cognito-identity-provider')
 
 const an_authenticated_user = async (user) => {
-  const cognito = new AWS.CognitoIdentityServiceProvider()
+  const cognito = new CognitoIdentityProviderClient()
   
-  let req = {
+  let req = new AdminDeleteUserCommand({
     UserPoolId: process.env.cognito_user_pool_id,
     Username: user.username
-  }
-  await cognito.adminDeleteUser(req).promise()
+  })
+  await cognito.send(req)
   
   console.log(`[${user.username}] - user deleted`)
 }
@@ -543,7 +557,7 @@ module.exports = {
 }
 ```
 
-6. Modify `steps/when.js` so that when we search restaurants, we would do so as an authenticated user.
+7. Modify `steps/when.js` so that when we search restaurants, we would do so as an authenticated user.
 
 Change the `we_invoke_search_restaurants` method to the following.
 
@@ -567,7 +581,7 @@ Notice that we're not taking in a `user` argument as well. This should be the au
 
 So let's go back to the test, and add steps to create and delete cognito users.
 
-7. Open `test_cases/search-restaurants.tests.js` and replace the whole file with the following
+8. Open `test_cases/search-restaurants.tests.js` and replace the whole file with the following
 
 ```javascript
 const { init } = require('../steps/init')
@@ -603,7 +617,7 @@ describe('Given an authenticated user', () => {
 })
 ```
 
-8. Run the acceptance tests
+9. Run the acceptance tests
 
 `npm run acceptance`
 
@@ -637,7 +651,7 @@ Snapshots:   0 total
 Time:        4.098s
 ```
 
-9. Run the integration tests again and see that all 3 tests are still passing as well
+10. Run the integration tests again and see that all 3 tests are still passing as well
 
 ```
  PASS  tests/test_cases/get-index.tests.js

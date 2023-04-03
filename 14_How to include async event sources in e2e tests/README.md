@@ -391,9 +391,9 @@ resp.Messages.forEach(msg => {
 })
 ```
 
-We do this in a `while` loop, and it can be stopped by called the `stop` function that is returned. Because at the start of each iteration, the `while` loop would check if `stopIt` has been set to `true`.
+We do this in a `while` loop, and it can be stopped by calling the `stop` function that is returned. Because at the start of each iteration, the `while` loop would check if `stopIt` has been set to `true`.
 
-We capture the result of this `loop` function, which is a `Promise<void>` without waiting for it, so the polling loop is kicked off right away.
+We capture the result of this `loop` function (which is a `Promise<void>`) without waiting for it, so the polling loop is kicked off right away.
 
 And only in the `stop` function do we wait for the `while` loop to finish and wait for its result (the aforementioned `Promise<void>`) to resolve. This way, we don't leave any unfinished `Promise` running, which would upset the jest runner.
 
@@ -407,7 +407,7 @@ const stop = async () => {
 }
 ```
 
-The `waitForMessage` function works finds the first message in the `ReplaySubject` that satisfies the caller's predict. While `Rxjs` operators normally return an `Observable`, the `firstValueFrom` function lets us return the first value returned by the `Observable` as a `Promise`. So the caller is able to use `async` `await` syntax to wait for their message to arrive.
+The `waitForMessage` function finds the first message in the `ReplaySubject` that satisfies the caller's predicate function. While `Rxjs` operators normally return an `Observable`, the `firstValueFrom` function lets us return the first value returned by the `Observable` as a `Promise`. So the caller is able to use `async` `await` syntax to wait for their message to arrive.
 
 We can use this helper module in both `place-order.tests.js` and `notify-restaurant.tests.js` modules, in place of the mocks!
 
@@ -545,7 +545,7 @@ Because the messages have to go from:
 3. forwarded to the `SQS` queue we configured earlier
 4. received by our test via long-polling
 
-so we're giving a bit longer to run than the other tests, and asked Jest to run it for 10s instead of the usual 5s timeout.
+so we're giving it a bit longer to run than the other tests, and asked Jest to run it for 10s instead of the usual 5s timeout.
 
 8. Run the integration test again
 

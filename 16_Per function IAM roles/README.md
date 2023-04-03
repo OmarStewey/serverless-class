@@ -17,6 +17,7 @@
 plugins:
   - serverless-export-env
   - serverless-export-outputs
+  - serverless-plugin-extrinsic-functions
   - serverless-iam-roles-per-function
 ```
 
@@ -62,7 +63,8 @@ iamRoleStatements:
     Resource: !GetAtt RestaurantsTable.Arn
   - Effect: Allow
     Action: ssm:GetParameters*
-    Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${self:service}/${sls:stage}/get-restaurants/config
+    Resource:
+      - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${self:service}/${param:ssmStage, sls:stage}/get-restaurants/config
 ```
 
 4. Give the `search-restaurants` function its own IAM role statements
@@ -75,11 +77,11 @@ iamRoleStatements:
   - Effect: Allow
     Action: ssm:GetParameters*
     Resource:
-      - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${self:service}/${sls:stage}/search-restaurants/config
-      - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${self:service}/${sls:stage}/search-restaurants/secretString
+      - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${self:service}/${param:ssmStage, sls:stage}/search-restaurants/config
+      - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${self:service}/${param:ssmStage, sls:stage}/search-restaurants/secretString
   - Effect: Allow
     Action: kms:Decrypt
-    Resource: ${ssm:/${self:service}/${sls:stage}/kmsArn}
+    Resource: ${ssm:/${self:service}/${param:ssmStage, sls:stage}/kmsArn}
 ```
 
 5. Give the `place-order` function its own IAM role statements
@@ -110,13 +112,5 @@ iamRoleStatements:
 8. Run the acceptance tests to make sure they're still working
 
 `npm run acceptance`
-
-But, since we don't have acceptance test coverage for the `notify-restaurant` function, we need to manually verify it's still working.
-
-9. Use the `lumigo-cli` to listen to the `EventBridge` event bus and the `SNS` topic. You need to run the [tail-eventbridge-bus](https://www.npmjs.com/package/lumigo-cli#lumigo-cli-tail-eventbridge-bus) and [tail-sns](https://www.npmjs.com/package/lumigo-cli#lumigo-cli-tail-sns) commands respectively.
-
-**Hint**: you can find the event bus name and SNS topic name in the `.env` file.
-
-10. Load the index page and place an order by clicking on one of the restaurants. See that the events are captured in the `EventBridge` bus and the `SNS` was published to the topic.
 
 </p></details>

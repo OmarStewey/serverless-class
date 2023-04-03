@@ -1078,3 +1078,76 @@ Again, no more mocks, we let our function talk to the real EventBridge bus and v
 And that's it, we are now validating the messages we publish to both SNS and EventBridge!
 
 </p></details>
+
+<details>
+<summary><b>Supporting temporary environments</b></summary><p>
+
+At the start of this module, we created the `IsE2eTest` condition, which allows us to conditionally create the SQS queue and EventBridge rule and SNS subscription we needed to make this flow work.
+
+But currently, this condition only works for the `dev` environment.
+
+
+```yml
+Conditions:
+  IsE2eTest:
+    Fn::Equals:
+      - ${sls:stage}
+      - dev
+```
+
+What if we're using temporary environments and need to run the same tests against those temporary environments?
+
+It'll be great to say, set the condition to true for any environment that **starts with** `dev`. Unfortunately, CloudFormation supports a limited set of conditional functions (see official documentation [here](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-conditions.html)). And while it's possible to combine these functions to make it work, it can quickly end up pretty complicated to understand.
+
+So, let's use one of my Serverless framework plugins to make it a bit easier, cheekily named serverless-plugin-**extrinsic**-functions :-P
+
+1. Install the plugin as a **dev dependency**
+
+```
+npm install --save-dev serverless-plugin-extrinsic-functions
+```
+
+2. Add it to the list of plugins in the `serverless.yml`
+
+```yml
+- serverless-plugin-extrinsic-functions
+```
+
+After this change, the plugins list should look like this:
+
+```yml
+plugins:
+  - serverless-export-env
+  - serverless-export-outputs
+  - serverless-plugin-extrinsic-functions
+```
+
+The plugin gives additional functions like `Fn::StartsWith`. See the full list [here](https://github.com/theburningmonk/serverless-plugin-extrinsic-functions).
+
+3. Change the `IsE2eTest` condition to the following:
+
+```yml
+Conditions:
+  IsE2eTest:
+    Fn::StartsWith:
+      - ${sls:stage}
+      - dev
+```
+
+**IMPORTANT**: make sure after you make this change, the `resources` section is still correctly aligned like this:
+
+```yml
+resources:
+  Conditions:
+    ...
+
+  Resources:
+    ...
+
+  Outputs:
+    ...
+```
+
+And that's it. Now your condition would work for any environment that starts with `dev`, including the `dev` environment itself. E.g. `dev-yan`, `dev-feature-a`. If you prefer to use `dev` as a suffix instead, then there's also the `Fn::EndsWith`. I generally prefer the environment name as a prefix, or add a `-` before the environment name if I have to use it in a suffix. Otherwise, it's possible to create accidental matches, e.g. `staging-findev`...
+
+</p></details>

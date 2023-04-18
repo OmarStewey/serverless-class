@@ -5,23 +5,24 @@
 <details>
 <summary><b>Using a simple logger</b></summary><p>
 
-I built a suite of tools to help folks build production-ready serverless applications while I was at DAZN. It's now open source: [dazn-lambda-powertools](https://github.com/getndazn/dazn-lambda-powertools).
+The [AWS Lambda Powertools](https://awslabs.github.io/aws-lambda-powertools-typescript/latest/) has a number of utilities to make it easier to build production-ready serverless applications. The project is also available in Python, Java and .Net.
 
 One of the tools available is a very simple logger that supports structured logging (amongst other things).
 
 So, first, let's install the logger for our project.
 
-1. At the project root, run the command `npm install --save @dazn/lambda-powertools-logger` to install the logger.
+1. At the project root, run the command `npm install --save @aws-lambda-powertools/logger` to install the logger.
 
 Now we need to change all the places where we're using `console.log`.
 
 2. Open `functions/get-index.js` and add the following to the top of the file
 
 ```javascript
-const Log = require('@dazn/lambda-powertools-logger')
+const { Logger } = require('@aws-lambda-powertools/logger')
+const logger = new Logger({ serviceName: process.env.serviceName })
 ```
 
-on ln19, replace
+on line 20, replace
 
 ```javascript
 console.log(`loading restaurants from ${restaurantsApiRoot}...`)
@@ -30,12 +31,12 @@ console.log(`loading restaurants from ${restaurantsApiRoot}...`)
 with
 
 ```javascript
-Log.debug('getting restaurants...', { url: restaurantsApiRoot })
+logger.debug('getting restaurants...', { url: restaurantsApiRoot })
 ```
 
 Notice that the `restaurantsApiRoot` is captured as a separate `url` attribute in the log message. Capturing variables as attributes (instead of baking them into the message) makes them easier to search and filter by.
 
-On ln36, replace
+On line 37, replace
 
 ```javascript
 console.log(`found ${restaurants.length} restaurants`)
@@ -44,7 +45,7 @@ console.log(`found ${restaurants.length} restaurants`)
 with
 
 ```javascript
-Log.debug('got restaurants', { count: restaurants.length })
+logger.debug('got restaurants', { count: restaurants.length })
 ```
 
 Again, notice how `count` is captured as a separate attribute.
@@ -52,10 +53,11 @@ Again, notice how `count` is captured as a separate attribute.
 3. Open `functions/get-restaurants.js` and add the following to the top of the file
 
 ```javascript
-const Log = require('@dazn/lambda-powertools-logger')
+const { Logger } = require('@aws-lambda-powertools/logger')
+const logger = new Logger({ serviceName: process.env.serviceName })
 ```
 
-On ln11, replace
+On line 15, replace
 
 ```javascript
 console.log(`fetching ${count} restaurants from ${tableName}...`)
@@ -64,13 +66,13 @@ console.log(`fetching ${count} restaurants from ${tableName}...`)
 with
 
 ```javascript
-Log.debug('getting restaurants from DynamoDB...', {
+logger.debug('getting restaurants from DynamoDB...', {
   count,
   tableName
 })
 ```
 
-And then on ln21, replace
+And then on line 25, replace
 
 ```javascript
 console.log(`found ${resp.Items.length} restaurants`)
@@ -79,7 +81,7 @@ console.log(`found ${resp.Items.length} restaurants`)
 with
 
 ```javascript
-Log.debug('found restaurants', {
+logger.debug('found restaurants', {
   count: resp.Items.length
 })
 ```
@@ -87,10 +89,11 @@ Log.debug('found restaurants', {
 4. Open `functions/place-order.js` and add the following to the top of the file
 
 ```javascript
-const Log = require('@dazn/lambda-powertools-logger')
+const { Logger } = require('@aws-lambda-powertools/logger')
+const logger = new Logger({ serviceName: process.env.serviceName })
 ```
 
-On ln12, replace
+On line 13, replace
 
 ```javascript
 console.log(`placing order ID [${orderId}] to [${restaurantName}]`)
@@ -99,10 +102,10 @@ console.log(`placing order ID [${orderId}] to [${restaurantName}]`)
 with
 
 ```javascript
-Log.debug('placing order...', { orderId, restaurantName })
+logger.debug('placing order...', { orderId, restaurantName })
 ```
 
-Similarly, on ln26, replace
+Similarly, on line 28, replace
 
 ```javascript
 console.log(`published 'order_placed' event into EventBridge`)
@@ -111,7 +114,7 @@ console.log(`published 'order_placed' event into EventBridge`)
 with
 
 ```javascript
-Log.debug(`published event into EventBridge`, {
+logger.debug(`published event into EventBridge`, {
   eventType: 'order_placed',
   busName
 })
@@ -119,105 +122,146 @@ Log.debug(`published event into EventBridge`, {
 
 5. Repeat the same process for `functions/notify-restaurant` and `functions/search-restaurants`, using your best judgement on what information you should log in each case.
 
-6. Run the integration tests
+6. So far, we have added a number of debug log messages. By default, the log level is set to `info` so we won't see these log messages. We can control the behaviour of the logger through a number of settings. These settings can be configured at the constructor level (for each logger) or using environment variables:
+
+* Service name
+* Logging level
+* Log incoming event (applicable when used with `injectLambdaContext` middleware, more on this later)
+* Debug log sampling (more on this later)
+
+For now, let's set the log level to `debug`. Go back to the `serverless.yml`, and add this to `provider.environment`:
+
+`LOG_LEVEL: debug`
+
+(mind the indentation)
+
+7. Run the integration tests
 
 `npm run test`
 
 and see that the functions are now logging in JSON
 
 ```
- PASS  tests/test_cases/get-index.tests.js
-  ● Console
-
-    console.debug
-      {"message":"getting restaurants...","url":"https://duiukrbz8l.execute-api.us-east-1.amazonaws.com/dev/restaurants","awsRegion":"us-east-1","level":20,"sLevel":"DEBUG"}
-
-      at Logger.log (node_modules/@dazn/lambda-powertools-logger/index.js:82:30)
-
-    console.debug
-      {"message":"got restaurants","count":8,"awsRegion":"us-east-1","level":20,"sLevel":"DEBUG"}
-
-      at Logger.log (node_modules/@dazn/lambda-powertools-logger/index.js:82:30)
-
+{"level":"DEBUG","message":"getting restaurants...","service":"workshop-yancui","timestamp":"2023-04-18T11:19:46.199Z","url":"https://os9v5foa01.execute-api.us-east-1.amazonaws.com/dev/restaurants"}
+{"level":"DEBUG","message":"notified restaurant of order","service":"workshop-yancui","timestamp":"2023-04-18T11:19:47.205Z","orderId":"7e9768b5-cdc8-5413-b37f-c0969aab985e","restaurantName":"Fangtasia"}
+{"level":"DEBUG","message":"getting restaurants from DynamoDB...","service":"workshop-yancui","timestamp":"2023-04-18T11:19:47.273Z","count":8,"tableName":"workshop-yancui-dev-RestaurantsTable-12DJXBCLOPCIP"}
  PASS  tests/test_cases/get-restaurants.tests.js
   ● Console
 
-    console.debug
-      {"message":"getting restaurants from DynamoDB...","count":"8","tableName":"workshop-yancui-dev-RestaurantsTable-N9HWPJCPE2EW","awsRegion":"us-east-1","level":20,"sLevel":"DEBUG"}
+    console.log
+      AWS credential loaded
 
-      at Logger.log (node_modules/@dazn/lambda-powertools-logger/index.js:82:30)
+      at log (tests/steps/init.js:25:11)
 
-    console.debug
-      {"message":"found restaurants","count":8,"awsRegion":"us-east-1","level":20,"sLevel":"DEBUG"}
+{"level":"DEBUG","message":"published event to EventBridge","service":"workshop-yancui","timestamp":"2023-04-18T11:19:47.608Z","eventType":"restaurant_notified","busName":"order_events_dev_yancui"}
+{"level":"DEBUG","message":"found restaurants","service":"workshop-yancui","timestamp":"2023-04-18T11:19:47.664Z","count":8}
+ PASS  tests/test_cases/get-index.tests.js
+  ● Console
 
-      at Logger.log (node_modules/@dazn/lambda-powertools-logger/index.js:82:30)
+    console.log
+      AWS credential loaded
 
+      at log (tests/steps/init.js:25:11)
+
+{"level":"DEBUG","message":"placing order...","service":"workshop-yancui","timestamp":"2023-04-18T11:19:47.956Z","orderId":"f55c3c7e-cfb4-525f-b97b-cda0d7845ab7","restaurantName":"Fangtasia"}
+{"level":"DEBUG","message":"got restaurants","service":"workshop-yancui","timestamp":"2023-04-18T11:19:47.994Z","count":8}
  PASS  tests/test_cases/notify-restaurant.tests.js
   ● Console
 
-    console.debug
-      {"message":"notified restaurant of order","orderId":"62cdbd2d-325f-5f21-9341-cb22e7da6c27","restaurantName":"Fangtasia","awsRegion":"us-east-1","level":20,"sLevel":"DEBUG"}
+    console.log
+      AWS credential loaded
 
-      at Logger.log (node_modules/@dazn/lambda-powertools-logger/index.js:82:30)
+      at log (tests/steps/init.js:25:11)
 
-    console.debug
-      {"message":"published event into EventBridge","eventType":"restaurant_notified","busName":"order_events_dev_yancui","awsRegion":"us-east-1","level":20,"sLevel":"DEBUG"}
+    console.log
+      stop polling SQS...
 
-      at Logger.log (node_modules/@dazn/lambda-powertools-logger/index.js:82:30)
+      at Object.log [as stop] (tests/messages.js:54:13)
 
+    console.log
+      long polling stopped
 
-ReferenceError: You are trying to `import` a file after the Jest environment has been torn down.
+      at Object.log [as stop] (tests/messages.js:58:13)
 
-      at Object.userAgent (node_modules/aws-sdk/lib/util.js:34:43)
-      at HttpRequest.setUserAgent (node_modules/aws-sdk/lib/http.js:111:78)
-      at new HttpRequest (node_modules/aws-sdk/lib/http.js:104:10)
-      at new Request (node_modules/aws-sdk/lib/request.js:328:24)
-      at features.constructor.makeRequest (node_modules/aws-sdk/lib/service.js:202:19)
+{"level":"DEBUG","message":"published event into EventBridge","service":"workshop-yancui","timestamp":"2023-04-18T11:19:48.366Z","eventType":"order_placed","busName":"order_events_dev_yancui"}
+{"level":"DEBUG","message":"finding restaurants with matching theme...","service":"workshop-yancui","timestamp":"2023-04-18T11:19:48.464Z","count":8,"theme":"cartoon"}
+{"level":"DEBUG","message":"found restaurants","service":"workshop-yancui","timestamp":"2023-04-18T11:19:48.880Z","count":4}
  PASS  tests/test_cases/place-order.tests.js
   ● Console
 
-    console.debug
-      {"message":"placing order...","orderId":"38fe7f3a-b6bd-5ecd-94c2-afdb119746c1","restaurantName":"Fangtasia","awsRegion":"us-east-1","level":20,"sLevel":"DEBUG"}
+    console.log
+      AWS credential loaded
 
-      at Logger.log (node_modules/@dazn/lambda-powertools-logger/index.js:82:30)
+      at log (tests/steps/init.js:25:11)
 
-    console.debug
-      {"message":"published event into EventBridge","eventType":"order_placed","busName":"order_events_dev_yancui","awsRegion":"us-east-1","level":20,"sLevel":"DEBUG"}
+    console.log
+      [test-Andre-Bell-vjohkdzn] - user is created
 
-      at Logger.log (node_modules/@dazn/lambda-powertools-logger/index.js:82:30)
+      at Object.log [as an_authenticated_user] (tests/steps/given.js:38:11)
 
+    console.log
+      [test-Andre-Bell-vjohkdzn] - initialised auth flow
 
-ReferenceError: You are trying to `import` a file after the Jest environment has been torn down.
+      at Object.log [as an_authenticated_user] (tests/steps/given.js:51:11)
 
-      at Object.userAgent (node_modules/aws-sdk/lib/util.js:34:43)
-      at HttpRequest.setUserAgent (node_modules/aws-sdk/lib/http.js:111:78)
-      at new HttpRequest (node_modules/aws-sdk/lib/http.js:104:10)
-      at new Request (node_modules/aws-sdk/lib/request.js:328:24)
-      at features.constructor.makeRequest (node_modules/aws-sdk/lib/service.js:202:19)
+    console.log
+      [test-Andre-Bell-vjohkdzn] - responded to auth challenge
+
+      at Object.log [as an_authenticated_user] (tests/steps/given.js:65:11)
+
+    console.log
+      [test-Andre-Bell-vjohkdzn] - user deleted
+
+      at Object.log [as an_authenticated_user] (tests/steps/teardown.js:15:11)
+
+    console.log
+      stop polling SQS...
+
+      at Object.log [as stop] (tests/messages.js:54:13)
+
+    console.log
+      long polling stopped
+
+      at Object.log [as stop] (tests/messages.js:58:13)
+
  PASS  tests/test_cases/search-restaurants.tests.js
   ● Console
+
+    console.log
+      AWS credential loaded
+
+      at log (tests/steps/init.js:25:11)
+
+    console.log
+      [test-Trevor-Harper-cxwsnhwx] - user is created
+
+      at Object.log [as an_authenticated_user] (tests/steps/given.js:38:11)
+
+    console.log
+      [test-Trevor-Harper-cxwsnhwx] - initialised auth flow
+
+      at Object.log [as an_authenticated_user] (tests/steps/given.js:51:11)
+
+    console.log
+      [test-Trevor-Harper-cxwsnhwx] - responded to auth challenge
+
+      at Object.log [as an_authenticated_user] (tests/steps/given.js:65:11)
 
     console.info
       this is a secret
 
-      at Function.module.exports.handler.middy (functions/search-restaurants.js:32:11)
+      at info (functions/search-restaurants.js:34:11)
 
-    console.debug
-      {"message":"finding restaurants with theme","count":"8","theme":"cartoon","tableName":"workshop-yancui-dev-RestaurantsTable-N9HWPJCPE2EW","awsRegion":"us-east-1","level":20,"sLevel":"DEBUG"}
+    console.log
+      [test-Trevor-Harper-cxwsnhwx] - user deleted
 
-      at Logger.log (node_modules/@dazn/lambda-powertools-logger/index.js:82:30)
+      at Object.log [as an_authenticated_user] (tests/steps/teardown.js:15:11)
 
-    console.debug
-      {"message":"found restaurants","count":4,"awsRegion":"us-east-1","level":20,"sLevel":"DEBUG"}
-
-      at Logger.log (node_modules/@dazn/lambda-powertools-logger/index.js:82:30)
-
-A worker process has failed to exit gracefully and has been force exited. This is likely caused by tests leaking due to improper teardown. Try running with --runInBand --detectOpenHandles to find leaks.
 
 Test Suites: 5 passed, 5 total
 Tests:       7 passed, 7 total
 Snapshots:   0 total
-Time:        5.271 s, estimated 14 s
+Time:        4.644 s, estimated 5 s
 Ran all test suites.
 ```
 
@@ -226,7 +270,7 @@ Ran all test suites.
 <details>
 <summary><b>Disable debug logging in production</b></summary><p>
 
-This logger allows you to control the default log level via the `LOG_LEVEL` environment variable. Let's configure the `LOG_LEVEL` environment such that we'll be logging at `INFO` level in production, but logging at `DEBUG` level everywhere else.
+Let's configure the `LOG_LEVEL` environment such that we'll be logging at `info` level in production, but logging at `debug` level everywhere else.
 
 1. Open `serverless.yml`. Under the `custom` section at the top, add `logLevel` as below:
 
@@ -236,7 +280,7 @@ logLevel:
   default: DEBUG
 ```
 
-2. Still in the `serverless.yml`, under `provider.environment` section, add the following
+2. Still in the `serverless.yml`, under `provider.environment` section, change the `LOG_LEVEL` environment variable to this
 
 ```yml
 LOG_LEVEL: ${self:custom.logLevel.${sls:stage}, self:custom.logLevel.default}
@@ -258,6 +302,9 @@ provider:
     rest_api_url: !Sub https://${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/${sls:stage}
     serviceName: ${self:service}
     stage: ${sls:stage}
+    ssmStage: ${param:ssmStage, sls:stage}
+    middy_cache_enabled: true
+    middy_cache_expiry_milliseconds: 60000 # 1 mins
     LOG_LEVEL: ${self:custom.logLevel.${sls:stage}, self:custom.logLevel.default}
 ```
 

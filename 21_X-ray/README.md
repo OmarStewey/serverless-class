@@ -33,12 +33,10 @@ iam:
 ```yml
 provider:
   name: aws
-  runtime: nodejs16.x
+  runtime: nodejs18.x
   stage: dev
   environment:
     ...
-  eventBridge:
-    useCloudFormation: true
   tracing:
     apiGateway: true
     lambda: true
@@ -86,241 +84,118 @@ To make our traces more useful, we need to capture more information about what o
 </p></details>
 
 <details>
-<summary><b>Instrumenting AWSSDK</b></summary><p>
+<summary><b>Enhancing X-Ray traces</b></summary><p>
 
 At the moment we're not getting a lot of value out of X-Ray. We can get much more information about what's happening in our code if we instrument the various steps.
 
-To begin with, we can instrument the AWS SDK so we track how long calls to DynamoDB and SNS takes in the traces.
+The AWS Lambda Powertools have some built-in facilities to help enhance the tracing. Such as tracing the AWS SDK and HTTP requests.
 
-1. Install `aws-xray-sdk-core` as dependency
+1. Install `@aws-lambda-powertools/tracer` as a production dependency
 
-`npm install --save aws-xray-sdk-core`
+`npm install --save @aws-lambda-powertools/tracer`
 
-2. Modify `functions/get-restaurants.js` and replace 
+2. In `functions/get-index.js`, add the following to the list of dependencies at the top of the file
 
 ```js
-const dynamodb = new DocumentClient()
-``` 
-
-with the following
-
-```javascript
-const dynamodb = new DocumentClient()
-const XRay = require('aws-xray-sdk-core')
-XRay.captureAWSClient(dynamodb.service)
+const { Tracer, captureLambdaHandler } = require('@aws-lambda-powertools/tracer')
+const tracer = new Tracer({ serviceName: process.env.serviceName })
 ```
 
-This instruments the DynamoDB client, so that it will emit additional trace segments so you can see how long the DynamoDB `Scan` operation took in the `get-restaurants` function.
+Creating a `Tracer` would automatically capture outgoing HTTP requests (such as the request to the `GET /restaurants` endpoint). So if this is all we do, and we deploy now, then in the X-Ray traces for the `get-index` function we will see the calls to the `GET /restaurants` endpoint as well as basic information from the `get-restaurants` function.
 
 ![](/images/mod23-004.png)
 
-3. Repeat step 2 for `functions/search-restaurants.js`
+But we can do more, while we're here.
 
-4. Open `functions/notify-restaurant.js`
-
-and replace 
+3. Staying in the `get-index.js` module, at the bottom of the file, add the `captureLambdaHandler` middleware:
 
 ```js
-const eventBridge = new EventBridge()
+.use(captureLambdaHandler(tracer))
 ```
 
-with the following
-
-```javascript
-const XRay = require('aws-xray-sdk-core')
-const eventBridge = XRay.captureAWSClient(new EventBridge())
-```
-
-and then replace 
+After this change, the `handler` function should look like this:
 
 ```js
-const sns = new SNS()
+module.exports.handler = middy(async (event, context) => {
+  logger.refreshSampleRateCalculation()
+
+  ...
+}).use(injectLambdaContext(logger))
+.use(captureLambdaHandler(tracer))
 ```
 
-with the following
+The `captureLambdaHandler` middleware adds a `## functions/get-index.handler` segment to the X-Ray trace, and captures additional information about the invocation:
 
-```js
-const sns = XRay.captureAWSClient(new SNS())
-```
-
-This allows us to trace the calls to SNS and EventBridge in the `notify-restaurant` function.
+* if it's a cold start
+* the name of the service
+* the response of the invocation
 
 ![](/images/mod23-005.png)
 
-5. Repeat step 4 for `functions/place-order.js` (minus the SNS step since it doesn't need the SNS client).
-
-6. Deploy the project
-
-`npx sls deploy`
-
-7. Load up the landing page, and place an order. Then head to the X-Ray console and see what you get now.
-
-If you look at a few of the traces for just the `get-restaurants` function, which you can do by going back to the traces view (and make sure the search box is empty).
-
-Click the link for the `/restaurants` URL:
-
 ![](/images/mod23-006.png)
 
-This should add the filter for the `/restaurants` path, and show you only the traces for the `get-restaurants` function.
+4. Still in the `get-index.js` module, we can also add the HTTP response from the `GET /restaurants` endpoint as metadata.
+
+On line 35, where we have:
+
+```js
+return (await httpReq).data
+```
+
+replace it with:
+
+```js
+const data = (await httpReq).data
+tracer.addResponseAsMetadata(data, 'GET /restaurants')
+
+return data
+```
+
+Doing this would add the HTTP response to metadata for the `## functions/get-index.handler` segment mentioned above:
 
 ![](/images/mod23-007.png)
 
-If you open a few of these traces, you might notice that the DynamoDB requests take somewhere between 30-80ms. That's an awful long time considering that DynamoDB averages single-digit latency. Most of that time is setting up the HTTPs connection, which unfortunately, is not reused by default by the Node.js AWS SDK (soon to be set as default in v3)!
+5. Open `get-restaurants.js` and add the following to list of dependencies at the top of the file:
 
-More details about this [here](https://theburningmonk.com/2019/02/lambda-optimization-tip-enable-http-keep-alive/).
-
-8. Now, let's apply the **single most effective performance optimize** for a Node.js function :-)
-
-Open `serverless.yml` and add the following environment variable to `provider.environment`:
-
-```yml
-AWS_NODEJS_CONNECTION_REUSE_ENABLED: "1"
+```js
+const { Tracer, captureLambdaHandler } = require('@aws-lambda-powertools/tracer')
+const tracer = new Tracer({ serviceName: process.env.serviceName })
+tracer.captureAWSv3Client(dynamodb)
 ```
 
-and redeploy
+**IMPORTANT**: this block needs to come **AFTER** where you have declared the `dynamodb` client instance.
 
-`npx sls deploy`
+6. Staying in the `get-restaurants.js` module, at the bottom of the file, add the `captureLambdaHandler` middleware:
 
-9. Reload the homepage a couple of times, and look at the traces for the `get-restaurants` function. Notice how much faster the subsequent invocations are! The effects are additive too, as every single request through the AWS SDK required HTTPs handshake...
+```js
+.use(captureLambdaHandler(tracer))
+```
 
-</p></details>
+After this change, the `handler` function should look like this:
 
-<details>
-<summary><b>Instrumenting HTTP calls</b></summary><p>
+```js
+module.exports.handler = middy(async (event, context) => {
+  logger.refreshSampleRateCalculation()
 
-We can get even more value if we could see the traces for `get-index` function and the corresponding trace for the `get-restaurants` function in one screen.
+  ...
+}).use(injectLambdaContext(logger))
+.use(captureLambdaHandler(tracer))
+```
+
+Doing these two steps would enrich the trace for the `get-restaurants` function. You will now be able to see the DynamoDB Scan call:
 
 ![](/images/mod23-008.png)
 
-Then it's proper distributed tracing! It's not very helpful if you're restricted to only what happens inside one function.
+7. Repeat step 5-6 for `functions/search-restaurants.js`.
 
-Fortunately, you can instrument the built-in `https` module with the X-Ray SDK, unfortunately, you have to use it instead of other HTTP clients..
+8. Repeat step 5-6 for `functions/place-order.js`, **EXCEPT** you want to use the tracer to capture the `eventBridge` client instead of the DynamoDB client.
 
-1. Modify `functions/get-index.js` and add the following to the **top of the file**
+9. Repeat step 5-6 for `functions/place-order.js`, **EXCEPT** you want to use the tracer to capture both the `eventBridge` client **AND** the `sns` client.
 
-```javascript
-const AWSXRay = require('aws-xray-sdk-core')
-AWSXRay.captureHTTPsGlobal(require('https'))
-```
-
-2. Deploy the project
+10. Deploy the project
 
 `npx sls deploy`
 
-3. Load up the landing page, and place an order. Then head to the X-Ray console and now you can see the traces for `get-index` and `get-restaurants` function in one place.
-
-</p></details>
-
-<details>
-<summary><b>Fix broken tests</b></summary><p>
-
-If you run the integration tests now
-
-`npm run test`
-
-then you'll see lots of error log messages in the console...
-
-```
- PASS  tests/test_cases/notify-restaurant.tests.js
- PASS  tests/test_cases/get-index.tests.js
-  ● Console
-
-    console.error node_modules/aws-xray-sdk-core/lib/logger.js:19
-      2020-05-18 18:05:03.480 +02:00 [ERROR] Error: Failed to get the current sub/segment from the context.
-          at Object.contextMissingLogError [as contextMissing] (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/aws-xray-sdk-core/lib/context_utils.js:26:19)
-          at Object.getSegment (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/aws-xray-sdk-core/lib/context_utils.js:92:45)
-          at Object.resolveSegment (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/aws-xray-sdk-core/lib/context_utils.js:73:19)
-          at captureOutgoingHTTPs (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/aws-xray-sdk-core/lib/patchers/http_p.js:97:31)
-          at Object.captureHTTPsRequest [as request] (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/aws-xray-sdk-core/lib/patchers/http_p.js:185:12)
-          at RedirectableRequest._performRequest (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/follow-redirects/index.js:169:24)
-          at new RedirectableRequest (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/follow-redirects/index.js:66:8)
-          at Object.wrappedProtocol.request (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/follow-redirects/index.js:307:14)
-          at dispatchHttpRequest (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/axios/lib/adapters/http.js:179:25)
-          at new Promise (<anonymous>)
-
- PASS  tests/test_cases/get-restaurants.tests.js
-  ● Console
-
-    console.error node_modules/aws-xray-sdk-core/lib/logger.js:19
-      2020-05-18 18:05:04.259 +02:00 [ERROR] Error: Failed to get the current sub/segment from the context.
-          at Object.contextMissingLogError [as contextMissing] (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/aws-xray-sdk-core/lib/context_utils.js:26:19)
-          at Object.getSegment (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/aws-xray-sdk-core/lib/context_utils.js:92:45)
-          at Object.resolveSegment (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/aws-xray-sdk-core/lib/context_utils.js:73:19)
-          at features.constructor.captureAWSRequest [as customRequestHandler] (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/aws-xray-sdk-core/lib/patchers/aws_p.js:60:29)
-          at features.constructor.addAllRequestListeners (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/aws-sdk/lib/service.js:283:12)
-          at features.constructor.makeRequest (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/aws-sdk/lib/service.js:203:10)
-          at features.constructor.svc.(anonymous function) [as scan] (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/aws-sdk/lib/service.js:677:23)
-          at DocumentClient.makeServiceRequest (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/aws-sdk/lib/dynamodb/document_client.js:97:42)
-          at DocumentClient.scan (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/aws-sdk/lib/dynamodb/document_client.js:360:17)
-          at getRestaurants (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/functions/get-restaurants.js:22:31)
-
- PASS  tests/test_cases/place-order.tests.js
- PASS  tests/test_cases/search-restaurants.tests.js
-  ● Console
-
-    console.info functions/search-restaurants.js:33
-      this is a new secret
-    console.error node_modules/aws-xray-sdk-core/lib/logger.js:19
-      2020-05-18 18:05:05.715 +02:00 [ERROR] Error: Failed to get the current sub/segment from the context.
-          at Object.contextMissingLogError [as contextMissing] (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/aws-xray-sdk-core/lib/context_utils.js:26:19)
-          at Object.getSegment (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/aws-xray-sdk-core/lib/context_utils.js:92:45)
-          at Object.resolveSegment (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/aws-xray-sdk-core/lib/context_utils.js:73:19)
-          at features.constructor.captureAWSRequest [as customRequestHandler] (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/aws-xray-sdk-core/lib/patchers/aws_p.js:60:29)
-          at features.constructor.addAllRequestListeners (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/aws-sdk/lib/service.js:283:12)
-          at features.constructor.makeRequest (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/aws-sdk/lib/service.js:203:10)
-          at features.constructor.svc.(anonymous function) [as scan] (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/aws-sdk/lib/service.js:677:23)
-          at DocumentClient.makeServiceRequest (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/aws-sdk/lib/dynamodb/document_client.js:97:42)
-          at DocumentClient.scan (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/node_modules/aws-sdk/lib/dynamodb/document_client.js:360:17)
-          at findRestaurantsByTheme (/Users/yancui/SourceCode/workshops/prsls-online-may-2020-demo/functions/search-restaurants.js:25:31)
-
-
-Test Suites: 5 passed, 5 total
-Tests:       7 passed, 7 total
-Snapshots:   0 total
-Time:        4.24s
-Ran all test suites.
-```
-
-1. One thing you could do, is to monkey-patch `console.error` with an anonymous mock function using `jest`. For example, in `steps/init.js`, and somewhere in the `init` function, add this one line:
-
-```javascript
-console.error = jest.fn()
-```
-
-3. Rerun the integration tests
-
-`npm run test`
-
-and see that all the tests should be passing now, and there're no a sea of error texts.
-
-```
- PASS  tests/test_cases/notify-restaurant.tests.js
-  ● Console
-
-    console.debug node_modules/@dazn/lambda-powertools-logger/index.js:82
-      {"message":"notified restaurant","orderId":"510dba15-69bd-582e-a82b-7caa168f32ae","restaurantName":"Fangtasia","awsRegion":"us-east-1","debug-log-enabled":"true","call-chain-length":1,"level":20,"sLevel":"DEBUG"}
-    console.debug node_modules/@dazn/lambda-powertools-logger/index.js:82
-      {"message":"published event to EventBridge","eventType":"restaurant_notified","busName":"order_events_dev_yancui","awsRegion":"us-east-1","debug-log-enabled":"true","call-chain-length":1,"level":20,"sLevel":"DEBUG"}
-
- PASS  tests/test_cases/get-index.tests.js
- PASS  tests/test_cases/get-restaurants.tests.js
- PASS  tests/test_cases/place-order.tests.js
- PASS  tests/test_cases/search-restaurants.tests.js
-  ● Console
-
-    console.info functions/search-restaurants.js:33
-      this is a new secret
-    console.debug node_modules/@dazn/lambda-powertools-logger/index.js:82
-      {"message":"finding restaurants with theme...","count":"8","theme":"cartoon","awsRegion":"us-east-1","debug-log-enabled":"false","call-chain-length":1,"level":20,"sLevel":"DEBUG"}
-    console.debug node_modules/@dazn/lambda-powertools-logger/index.js:82
-      {"message":"found restaurants","count":4,"awsRegion":"us-east-1","debug-log-enabled":"false","call-chain-length":1,"level":20,"sLevel":"DEBUG"}
-
-
-Test Suites: 5 passed, 5 total
-Tests:       7 passed, 7 total
-Snapshots:   0 total
-Time:        4.667s
-Ran all test suites.
-```
+11. Load up the landing page, and place an order. Then head to the X-Ray console and see what you get now.
 
 </p></details>

@@ -1,101 +1,165 @@
 # Module 20: Sample debug logs in production
 
-## Sample 1% of debug logs in production
-
 <details>
-<summary><b>Install lambda-powertools-pattern-basic</b></summary><p>
+<summary><b>Configure the sampling rate</b></summary><p>
 
-1. At the project root, run the command `npm install --save @dazn/lambda-powertools-pattern-basic`.
+1. In the `serverless.yml`, add a `POWERTOOLS_LOGGER_SAMPLE_RATE` environment variable to `provider.environment`, i.e.
 
-This package gives you a simple wrapper which applies a couple of [middy](https://github.com/middyjs/middy) middlewares for your function:
+```yml
+POWERTOOLS_LOGGER_SAMPLE_RATE: 0.1
+```
 
-* `@dazn/lambda-powertools-middleware-sample-logging`: which supports sampling debug logs. The wrapper configures this sample logging middleware to sample debug logs for 1% of invocations.
+(mind the indentation)
 
-* `@dazn/lambda-powertools-middleware-correlation-ids`: which extracts correlation IDs from the invocation event and makes them available for the logger. It also supports a special correlation ID `debug-log-enabled`, which enables sampling debug logs at the user transaction (a chain of Lambda invocations) level.
+This tells the logger we installed in the last module to print all the log items regardless the current log level at a given percentage. Here, `0.1` means 10%.
 
-* `@dazn/lambda-powertools-middleware-log-timeout`: which emits an error message for when a function times out. Normally, when a Lambda function times out, you don't get an error message from the application, which makes debugging time out errors difficult.
+However, the decision to sample all logs or not happens in the constructor of the `Logger` type. So if we want to sample logs for a percentage of invocations, we have two choices:
 
-Now we need to apply it to all of our functions.
+A) initialize the logger inside the handler body, or
+B) call `logger.refreshSampleRateCalculation()` at the start or end of every invocation to force the logger to re-evaluate (based on our configured sample rate) whether it should include all log items.
+
+Option A makes using the logger more difficult because you'd need to pass the logger instance around to every method you call. E.g. when the `get-index` module's `handler` function calls the `getRestaurants` function, which needs to write some logs.
+
+There are ways to get around this. But I think option B is simpler and offers less resistance, so let's go with that!
+
+2. Open `get-index.js` and add this as the 1st line in the `handler` function:
+
+```js
+logger.refreshSampleRateCalculation()
+```
+
+So after the change, the `handler` function should look like this:
+
+```js
+module.exports.handler = async (event, context) => {
+  logger.refreshSampleRateCalculation()
+  
+  const restaurants = await getRestaurants()
+  logger.debug('got restaurants', { count: restaurants.length })
+  const dayOfWeek = days[new Date().getDay()]
+  const view = {
+    awsRegion,
+    cognitoUserPoolId,
+    cognitoClientId,
+    dayOfWeek,
+    restaurants,
+    searchUrl: `${restaurantsApiRoot}/search`,
+    placeOrderUrl: `${ordersApiRoot}`
+  }
+  const html = Mustache.render(template, view)
+  const response = {
+    statusCode: 200,
+    headers: {
+      'content-type': 'text/html; charset=UTF-8'
+    },
+    body: html
+  }
+
+  return response
+}
+```
+
+3. Repeat step 2 for `get-restaurants.js`, `notify-restaurant.js`, `place-order.js` and `search-restaurants.js`.
 
 </p></details>
 
 <details>
-<summary><b>Wrap function handlers</b></summary><p>
+<summary><b>Log the incoming invocation event</b></summary><p>
 
-1. Open `functions/get-index.js` and require the `@dazn/lambda-powertools-pattern-basic` module (at the top of the file)
+1. In the `serverless.yml`, add a `POWERTOOLS_LOGGER_LOG_EVENT` environment variable to `provider.environment`, i.e.
 
-```javascript
-const wrap = require('@dazn/lambda-powertools-pattern-basic')
+```yml
+POWERTOOLS_LOGGER_LOG_EVENT: true
 ```
 
-And use it to wrap our handler function.
+(mind the indentation)
 
-On ln35, change
+This tells the logger we installed in the last module to log the Lambda invocation event. It's very helpful for troubleshooting problems, but keep in mind that there is no built-in data scrubbing. So any sensitive information (such as PII data) in the invocation event would be included in your logs.
+
+For this to work, however, we need to add the `injectLambdaContext` middleware, which also enriches the log messages with these additional fields:
+
+* cold_start
+* function_name
+* function_memory_size
+* function_arn
+* function_request_id
+
+2. In the `get-index.js`, towards the top of the file, where we had:
 
 ```js
-module.exports.handler = async (event, context) => {
+const { Logger } = require('@aws-lambda-powertools/logger')
 ```
 
-to:
-
-```javascript
-module.exports.handler = wrap(async (event, context) => {
-```
-
-and don't forget to add the closing `)` on ln58!
-
-This works exactly like the Middy and SSM middleware we saw earlier, because under the hood, the `@dazn/lambda-powertools-pattern-basic` wrapper also uses `middy`.
-
-2. Repeat step 1 for `notify-restaurant` and `place-order` functions.
-
-3. Open `functions/get-restaurants.js` and require the `@dazn/lambda-powertools-pattern-basic` module (at the top of the file)
-
-```javascript
-const wrap = require('@dazn/lambda-powertools-pattern-basic')
-```
-
-And use it to wrap our handler function. On ln28 replace
+change it to:
 
 ```js
-module.exports.handler = middy(async (event, context) => {
+const { Logger, injectLambdaContext } = require('@aws-lambda-powertools/logger')
 ```
 
-with
-
-```js
-module.exports.handler = wrap(async (event, context) => {
-```
-
-The SSM would still continue to work because the `@dazn/lambda-powertools-pattern-basic` module's wrapper also uses Middy.
-
-Also, we can remove the direct dependency on Middy in this module.
-
-Remove this line from the file:
+3. Staying in the `get-index.js`, bring in `middy`. At the top of the file, add:
 
 ```js
 const middy = require('@middy/core')
 ```
 
-4. Repeat step 3 for `search-restaurants` function as well.
+4. Wrap the `handler` function with `middy` and apply the `injectLambdaContext` middleware from step 2. Such that this:
 
-5. Run integration test
+```js
+module.exports.handler = async (event, context) => {
+  ...
+}
+```
 
-`npm run test`
+becomes this:
 
-and see that all the tests are still passing.
+```js
+module.exports.handler = middy(async (event, context) => {
+  ...
+}).use(injectLambdaContext(logger))
+```
 
-4. Deploy the project
+5. In the `get-restaurants.js`, change the line
 
-`npx sls deploy`
+```js
+const { Logger } = require('@aws-lambda-powertools/logger')
+```
+
+to
+
+```js
+const { Logger, injectLambdaContext } = require('@aws-lambda-powertools/logger')
+```
+
+6. The `get-restaurants` function already uses `middy` to load SSM parameters, so we don't need to wrap its handler. Instead, add the `injectLambdaContext` middleware to the list.
+
+The handler goes from this:
+
+```js
+module.exports.handler = middy(async (event, context) => {
+  ...
+}).use(ssm({
+  ...
+})
+```
+
+to this:
+
+```js
+module.exports.handler = middy(async (event, context) => {
+  ...
+}).use(ssm({
+  ...
+}).use(injectLambdaContext(logger))
+```
+
+7. Repeat the same process for `search-restaurants.js`, `place-order.js` and `notify-restaurant.js`. Some of these uses `middy` already, some don't. Follow the same steps as above to add `middy` as necessary.
+
+8. Run the integration tests with `npm run test` to make sure the tests are still passing. And notice in the console output that new fields are added to the log messages, such as `cold_start` and `function_memory_size`.
 
 </p></details>
 
 <details>
-<summary><b>Configure the default sample rate</b></summary><p>
-
-One of the things the `@dazn/lambda-powertools-pattern-basic` wrapper gives you is basic debug log sampling - that is, even when you log at a higher level, say `INFO`, where you shouldn't see `DEBUG` logs, it'll sample your `DEBUG` logs for 1% of the invocations.
-
-This ensures that even in production environment, where it's too costly to log all debug messages, you can still retain a small sample of debug messages for when a problem arise and you need to investigate it.
+<summary><b>See the sampling in action</b></summary><p>
 
 To see this sampling behaviour in action, you can either deploy to a `prod` stage, or you can change the default log level for our `dev` stage. For simplicity (and to avoid the hassle of setting up those SSM parameters for another stage), let's do that.
 
@@ -111,25 +175,7 @@ then redeploy
 
 `npx sls deploy`
 
-2. Now reload the homepage a few times and you'll notice that you no longer see the debug log messages in the `get-index` and `get-restaurants` functions' logs.
-
-This is because by default the `@dazn/lambda-powertools-pattern-basic` wrapper configures the debug logs sample rate to be 1% based on industry average.
-
-Now, try turning this up to say, 10%, by adding a `SAMPLE_DEBUG_LOG_RATE` environment variable.
-
-In `serverless.yml`, and add a `SAMPLE_DEBUG_LOG_RATE` environment variable under `provider.environment`:
-
-```yml
-environment:
-  SAMPLE_DEBUG_LOG_RATE: 0.1
-  ...
-```
-
-then redeploy
-
-`npx sls deploy`
-
-3. Now reload the homepage a few more times, and you should occassionally see debug log messages in the logs for the `get-index` and `get-restaurants` functions.
+2. Now reload the homepage a few times, and you should occassionally see `debug` log messages in the logs for the `get-index` and `get-restaurants` functions. But you will always see the invocation event logged as `info`.
 
 ![](/images/mod22-001.png)
 

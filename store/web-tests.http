@@ -1,0 +1,8 @@
+@baseUrl = 
+POST {{baseUrl}}/dev/restaurants/search
+Content-Type: application/json
+
+{
+    "theme": "cartoon"
+}
+

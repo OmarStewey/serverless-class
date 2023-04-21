@@ -1,8 +1,14 @@
-@baseUrl = 
-POST {{baseUrl}}/dev/restaurants/search
+@baseUrl = https://6itp28hgu0.execute-api.us-east-1.amazonaws.com/dev/
+
+POST {{ baseUrl }}/restaurants/search
 Content-Type: application/json
 
 {
     "theme": "cartoon"
 }
+
+###
+
+GET {{ baseUrl }}/
+
 
